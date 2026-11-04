@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+/data/*.db
+/data/*.db-*
+/web/dist/
+/web/node_modules/
+/bin/
