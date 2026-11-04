@@ -1,67 +1,112 @@
-# Emotion — Software Design Description
+# Emotion — Spec-Driven Development
 
-## 1. Purpose
+This document is the executable product specification for Emotion. Each phase starts with requirements, defines acceptance criteria, then adds implementation and tests. A phase is complete only when its acceptance criteria pass.
 
-Emotion is a small internal management system for a photography business. It replaces the paper cash book with a clear workflow for service orders, receivables, cash movements, expenses and appointments. The first release is intentionally sized for one business and up to two users.
+## Product goal
 
-## 2. Product decisions
+Emotion replaces a paper cash book for a small photography business. It answers three questions clearly: what came in, what went out and what is still pending. It supports up to two users, Portuguese Brazilian formatting, Brazilian reais and `America/Sao_Paulo` display time.
 
-- **Frontend:** React, TypeScript, Vite and Tailwind CSS. The UI uses large controls, short forms, a three-item sidebar and light/dark themes.
-- **Backend:** Go `net/http` service. Business rules live on the server so totals and permissions cannot be changed by the browser.
-- **Persistence:** SQLite on a persistent VPS volume. Monetary values are integer cents. All multi-row order creation runs in a transaction.
-- **Runtime:** One Docker image serves both the compiled frontend and API. A reverse proxy such as Dockploy's proxy terminates TLS.
-- **Time:** Instants are stored in UTC; user-facing display uses `America/Sao_Paulo`. Local due dates remain date-only values.
+## Product rules
 
-## 3. System boundaries
+- Cash basis is the primary view: received payments minus paid expenses.
+- A sale, an expected receivable and a received payment are different records.
+- Money is stored as integer cents; no floating-point totals.
+- An order and its installments are created in one database transaction.
+- The server owns financial calculations and authorization; the browser is not trusted.
+- The system does not store card numbers, issue invoices, reconcile bank accounts or store photo files in the first release.
 
-The system owns orders, customers, payment plans, received payments, expenses, appointments and audit records. It does not process card numbers, issue invoices, reconcile banks, send WhatsApp messages or store photo files in phase 1.
+## Requirements
+
+### AUTH — authentication and access
+
+- `AUTH-01`: Create the first administrator from environment variables and reject the default password.
+- `AUTH-02`: Store passwords with Argon2id and a unique random salt.
+- `AUTH-03`: Create a short-lived JWT in an HttpOnly cookie; never place tokens in localStorage.
+- `AUTH-04`: Reload the active user and enforce permissions on the server for protected routes.
+- `AUTH-05`: Clear the cookie on logout; production cookies are Secure and SameSite protected.
+
+Acceptance: invalid credentials return 401; protected endpoints without a valid cookie return 401; valid credentials return the current user; secrets do not appear in logs or source code.
+
+### CASH — book cash and dashboard
+
+- `CASH-01`: Show received, paid expenses, result, receivables and payables for a selected month.
+- `CASH-02`: A paid expense reduces the result; a pending expense appears in payables but does not reduce the result.
+- `CASH-03`: A payment appears once in received cash and can be traced to its order or installment.
+- `CASH-04`: Dashboard values are derived on the server from database records.
+
+Acceptance: a R$ 100 receipt and a R$ 40 paid expense produce R$ 60 result; pending values remain separate; reloading cannot create duplicate cash entries.
+
+### ORDER — service orders and receivables
+
+- `ORDER-01`: Record customer, service type, description, total and status.
+- `ORDER-02`: Split the total into 1–120 installments and distribute cent residuals deterministically.
+- `ORDER-03`: Allocate an initial payment against expected installments and reduce the outstanding balance.
+- `ORDER-04`: Reject overpayments, negative amounts and invalid required fields.
+
+Acceptance: a R$ 1,200 order in 12 installments creates twelve R$ 100 receivables; a R$ 500 signal leaves R$ 700 to receive; an overpayment returns 400 and creates no committed order.
+
+### CAL — calendar
+
+- `CAL-01`: Appointments have title, start, end, location, notes and optional order link.
+- `CAL-02`: The UI provides daily, weekly and monthly views.
+- `CAL-03`: User-facing times use `America/Sao_Paulo`; instants are stored in UTC.
+- `CAL-04`: Conflicting times are visible before saving.
+
+Acceptance: an appointment created in São Paulo renders on the same local date; all three views navigate the selected period; malformed intervals are rejected.
+
+### UX — accessibility and simplicity
+
+- `UX-01`: Main navigation has Overview, Service Orders and Calendar.
+- `UX-02`: Use plain language (“Entrou”, “Saiu”, “Falta receber”) and large controls.
+- `UX-03`: Support light/dark theme, keyboard focus and mobile layout.
+- `UX-04`: Forms show clear validation and success/error feedback.
+
+Acceptance: a first-time user can log in, create an order and see its total without documentation; the layout remains usable at mobile width; color is not the only status indicator.
+
+## Delivery phases
+
+### Phase 0 — specification and repository
+
+Status: **complete**. The plan, this specification, repository structure, environment template and acceptance checklist are in place.
+
+### Phase 1 — foundation and secure access
+
+Status: **complete**. Go service, SQLite migrations, first admin, Argon2id password hashing, JWT cookie session, protected routes, React/TypeScript/Tailwind shell and Docker image are implemented and tested.
+
+### Phase 2 — cashbook and service orders
+
+Status: **partially complete**. Dashboard API, expense creation, order creation, installment generation and initial-payment allocation are implemented. Remaining: payment recording screen, order detail/editing, expense payment action, audit history and CSV export.
+
+### Phase 3 — calendar workflow
+
+Status: **partially complete**. Appointment API and the first calendar shell exist. Remaining: real daily/weekly/monthly grids, create/edit modal, conflict validation and order links in the UI.
+
+### Phase 4 — operational hardening
+
+Status: **planned**. Add external encrypted SQLite backup and restore command, login rate limiting, structured audit logs, production CORS policy, monitoring and deployment runbook. Restore a backup in a staging container before real use.
+
+### Phase 5 — production acceptance
+
+Status: **planned**. Run the full acceptance checklist with the business owner, deploy to Dockploy with a persistent `/app/data` volume, verify HTTPS, confirm administrator workflows and tag the first production release.
+
+## Architecture contract
 
 ```text
-Browser ── HTTPS ──> Reverse proxy ──> Emotion container
-                                      ├── Go API
-                                      ├── SQLite volume (/app/data)
-                                      └── Static Vite build
+Browser ── HTTPS ──> Dockploy proxy ──> Emotion container
+                                      ├── Go HTTP API
+                                      ├── SQLite at /app/data
+                                      └── Vite static build
 ```
 
-## 4. Domain model
+The frontend calls relative `/api` routes. The backend uses parameterized SQL, transactions for financial writes, security headers and JSON errors. Docker exposes port 8080 and includes a health check at `/api/health`.
 
-`service_orders` represent the work sold. `receivables` represent the expected installments. `payments` represent money actually received. `expenses` represent accounts payable and their paid state. `appointments` represent time in the calendar. `audit_events` preserve the actor and action for financial changes.
+## Verification commands
 
-The dashboard uses cash basis: `received payments - paid expenses`. Expected receivables and pending expenses are displayed separately. An order for R$ 1,200 in 12 installments creates twelve expected R$ 100 receivables; it does not create a R$ 1,200 cash entry until payments are recorded.
+```bash
+go test ./...
+go vet ./...
+cd web && npm run build && npm audit --audit-level=high
+docker build -t emotion:local .
+```
 
-## 5. API contract (phase 1)
-
-All protected endpoints require the `emotion_access` HttpOnly cookie. JSON errors use `{ "error": "message" }`.
-
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| GET | `/api/health` | Liveness probe. |
-| POST | `/api/auth/login` | Authenticate and set a short-lived JWT cookie. |
-| POST | `/api/auth/logout` | Clear the access cookie. |
-| GET | `/api/auth/me` | Return the current user. |
-| GET | `/api/dashboard?month=YYYY-MM` | Return cash, receivable and payable totals. |
-| GET/POST | `/api/orders` | List or create service orders and installment plans. |
-| GET/POST | `/api/expenses` | List or create expenses. |
-| GET/POST | `/api/appointments` | List or create appointments. |
-
-## 6. Security design
-
-- First-run admin credentials are supplied through environment variables; the default password is rejected.
-- Passwords use Argon2id with a unique random salt. Passwords and tokens are never logged.
-- Access JWTs use HS256 with a server-only secret, explicit issuer/audience, 15-minute expiration and an allowlisted algorithm. Tokens are HttpOnly, Secure in production and SameSite Lax cookies; the frontend never reads them.
-- Every protected request validates the cookie and reloads the active user from the database. No authorization decision is trusted from client input.
-- Request bodies are size limited and required fields are validated. SQL uses placeholders. Security headers, CORS credentials and HTTPS deployment are documented.
-- Production must set `JWT_SECRET` from Dockploy secrets, enable `COOKIE_SECURE=true`, restrict the proxy origin, mount `/app/data`, and back up the SQLite database outside the VPS.
-
-## 7. Delivery phases
-
-1. **Foundation (this release):** repository, SDD/plan, Docker, SQLite schema, auth, dashboard API, orders, expenses, appointments, responsive shell and API tests.
-2. **Workflow completion:** payment recording UI, order detail/editing, expense payment actions, calendar day/week/month views, audit UI and CSV export.
-3. **Operations:** backup/restore command, health checks, rate limiting, structured logs, security headers review, deployment runbook and staging restore rehearsal.
-
-## 8. Verification strategy
-
-- `go test ./...` covers login, protected routes, dashboard calculation path and invalid overpayment input.
-- `npm run build` type-checks and compiles the frontend.
-- `docker build -t emotion:local .` verifies the production image can build both layers.
-- Before production: run the container with a persistent volume, check `/api/health`, perform an admin login, create an order and expense, verify dashboard totals, and restore a backup into a temporary database.
+The production gate additionally requires a container smoke test, a persistent volume, a real admin login, one order, one paid expense, one pending expense, a dashboard reconciliation and a successful backup restore.
