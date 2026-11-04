@@ -166,6 +166,41 @@ func TestCreateOrderStoresServiceDateAndPaymentPlan(t *testing.T) {
 	}
 }
 
+func TestCreateOrderAutoSchedulesOnlyCalendarServices(t *testing.T) {
+	s := testServer(t)
+	cookie := authenticatedCookie(t, s)
+	createOrder := func(body string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/orders", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := createOrder(`{"customer_name":"Lucas","service_type":"Ensaio fotográfico","description":"Levar duas lentes","service_date":"2026-12-03","service_start_time":"14:00","service_end_time":"16:00","service_location":"Estúdio central","total_cents":10000}`); code != http.StatusCreated {
+		t.Fatalf("photography order status=%d", code)
+	}
+	if code := createOrder(`{"customer_name":"Ana","service_type":"Caneca","service_date":"2026-12-03","service_start_time":"14:00","service_end_time":"16:00","total_cents":5000}`); code != http.StatusCreated {
+		t.Fatalf("product order status=%d", code)
+	}
+	list := httptest.NewRequest(http.MethodGet, "/api/appointments", nil)
+	list.AddCookie(cookie)
+	listRecorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(listRecorder, list)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list appointments status=%d", listRecorder.Code)
+	}
+	var appointments []map[string]any
+	_ = json.NewDecoder(listRecorder.Body).Decode(&appointments)
+	if len(appointments) != 1 {
+		t.Fatalf("appointments = %#v, want one scheduled photography service", appointments)
+	}
+	appointment := appointments[0]
+	if appointment["title"] != "Ensaio fotográfico · Lucas" || appointment["location"] != "Estúdio central" || appointment["notes"] != "Levar duas lentes" || appointment["service_type"] != "Ensaio fotográfico" {
+		t.Fatalf("unexpected auto appointment = %#v", appointment)
+	}
+}
+
 func authenticatedCookie(t *testing.T, s *Server) *http.Cookie {
 	t.Helper()
 	login := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"email":"admin@example.com","password":"correct horse battery staple"}`))
@@ -257,7 +292,7 @@ func TestAppointmentRejectsConflict(t *testing.T) {
 func TestAppointmentDetailsAndCancel(t *testing.T) {
 	s := testServer(t)
 	cookie := authenticatedCookie(t, s)
-	create := httptest.NewRequest(http.MethodPost, "/api/appointments", strings.NewReader(`{"title":"Ensaio Lucas","starts_at":"2099-11-03T14:00:00-03:00","ends_at":"2099-11-03T16:00:00-03:00","location":"Estúdio central","notes":"Levar fundo branco"}`))
+	create := httptest.NewRequest(http.MethodPost, "/api/appointments", strings.NewReader(`{"title":"Ensaio Lucas","starts_at":"2026-12-03T14:00:00-03:00","ends_at":"2026-12-03T16:00:00-03:00","location":"Estúdio central","notes":"Levar fundo branco"}`))
 	create.Header.Set("Content-Type", "application/json")
 	create.AddCookie(cookie)
 	createRecorder := httptest.NewRecorder()

@@ -43,16 +43,17 @@ Acceptance: a R$ 100 receipt and a R$ 40 paid expense produce R$ 60 result; pend
 - `ORDER-03`: Record an initial payment as a paid entry and generate remaining receivables from the outstanding balance.
 - `ORDER-05`: Capture the service/photography date, first installment due date, observations and separate payment methods for the entry and remaining installments.
 - `ORDER-04`: Reject overpayments, negative amounts and invalid required fields.
+- `ORDER-06`: Automatically create one linked calendar appointment for photo shoots, weddings and events; product orders and Foto 3×4 do not create appointments.
 
-Acceptance: a R$ 1,200 order in 12 installments creates twelve R$ 100 receivables; a R$ 500 signal creates a paid entry and leaves R$ 700 to receive; the form previews each remaining installment, stores the service date and supports separate Pix/credit/etc. methods; an overpayment returns 400 and creates no committed order.
+Acceptance: a R$ 1,200 order in 12 installments creates twelve R$ 100 receivables; a R$ 500 signal creates a paid entry and leaves R$ 700 to receive; the form previews each remaining installment, stores the service date and supports separate Pix/credit/etc. methods; an eligible service creates a linked appointment with its date, time, location and notes; products remain off the calendar; an overpayment returns 400 and creates no committed order.
 
 ### CAL — calendar
 
 - `CAL-01`: Appointments have title, start, end, location, notes and optional order link.
 - `CAL-02`: Clicking an appointment opens its full details, including linked order context, and exposes an in-app cancellation action without browser-native confirmation dialogs.
-- `CAL-02`: The UI provides daily, weekly and monthly views.
-- `CAL-03`: User-facing times use `America/Sao_Paulo`; instants are stored in UTC.
-- `CAL-04`: Conflicting times are visible before saving.
+- `CAL-03`: The UI provides daily, weekly and monthly views.
+- `CAL-04`: User-facing times use `America/Sao_Paulo`; instants are stored in UTC.
+- `CAL-05`: Conflicting times are visible before saving.
 
 Acceptance: an appointment created in São Paulo renders on the same local date; all three views navigate the selected period; malformed intervals are rejected.
 

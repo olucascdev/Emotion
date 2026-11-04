@@ -94,13 +94,17 @@ func NewServer(cfg Config) (*Server, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.backfillCalendarAppointments(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
 func (s *Server) migrate() error {
 	_, err := s.db.Exec(`PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','manager')), active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS service_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, number TEXT NOT NULL UNIQUE, customer_name TEXT NOT NULL, customer_phone TEXT, service_type TEXT NOT NULL, description TEXT, total_cents INTEGER NOT NULL CHECK(total_cents >= 0), status TEXT NOT NULL DEFAULT 'open', due_date TEXT, service_date TEXT, payment_plan_method TEXT, created_at TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS service_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, number TEXT NOT NULL UNIQUE, customer_name TEXT NOT NULL, customer_phone TEXT, service_type TEXT NOT NULL, description TEXT, total_cents INTEGER NOT NULL CHECK(total_cents >= 0), status TEXT NOT NULL DEFAULT 'open', due_date TEXT, service_date TEXT, service_start_time TEXT, service_end_time TEXT, service_location TEXT, payment_plan_method TEXT, created_at TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS receivables (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL REFERENCES service_orders(id), installment_number INTEGER NOT NULL, total_installments INTEGER NOT NULL, due_date TEXT NOT NULL, amount_cents INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending');
 CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER REFERENCES service_orders(id), receivable_id INTEGER REFERENCES receivables(id), amount_cents INTEGER NOT NULL CHECK(amount_cents > 0), paid_at TEXT NOT NULL, method TEXT NOT NULL, note TEXT);
 CREATE TABLE IF NOT EXISTS expenses (id INTEGER PRIMARY KEY AUTOINCREMENT, description TEXT NOT NULL, category TEXT NOT NULL, amount_cents INTEGER NOT NULL CHECK(amount_cents > 0), due_date TEXT, paid_at TEXT, method TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id));
@@ -113,6 +117,15 @@ CREATE INDEX IF NOT EXISTS idx_appointments_starts_at ON appointments(starts_at)
 		return err
 	}
 	if _, err = s.db.Exec("ALTER TABLE service_orders ADD COLUMN service_date TEXT"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	if _, err = s.db.Exec("ALTER TABLE service_orders ADD COLUMN service_start_time TEXT"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	if _, err = s.db.Exec("ALTER TABLE service_orders ADD COLUMN service_end_time TEXT"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	if _, err = s.db.Exec("ALTER TABLE service_orders ADD COLUMN service_location TEXT"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
 		return err
 	}
 	if _, err = s.db.Exec("ALTER TABLE service_orders ADD COLUMN payment_plan_method TEXT"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
@@ -321,7 +334,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listOrders(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query("SELECT id,number,customer_name,service_type,total_cents,status,COALESCE(due_date,''),COALESCE(service_date,''),created_at FROM service_orders ORDER BY id DESC LIMIT 100")
+	rows, err := s.db.Query("SELECT id,number,customer_name,service_type,total_cents,status,COALESCE(due_date,''),COALESCE(service_date,''),COALESCE(service_start_time,''),COALESCE(service_end_time,''),COALESCE(service_location,''),created_at FROM service_orders ORDER BY id DESC LIMIT 100")
 	if err != nil {
 		writeError(w, 500, "could not list orders")
 		return
@@ -330,10 +343,10 @@ func (s *Server) listOrders(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id int64
-		var number, name, typ, status, due, serviceDate, created string
+		var number, name, typ, status, due, serviceDate, serviceStartTime, serviceEndTime, serviceLocation, created string
 		var total int64
-		if rows.Scan(&id, &number, &name, &typ, &total, &status, &due, &serviceDate, &created) == nil {
-			items = append(items, map[string]any{"id": id, "number": number, "customer_name": name, "service_type": typ, "total_cents": total, "status": status, "due_date": due, "service_date": serviceDate, "created_at": created})
+		if rows.Scan(&id, &number, &name, &typ, &total, &status, &due, &serviceDate, &serviceStartTime, &serviceEndTime, &serviceLocation, &created) == nil {
+			items = append(items, map[string]any{"id": id, "number": number, "customer_name": name, "service_type": typ, "total_cents": total, "status": status, "due_date": due, "service_date": serviceDate, "service_start_time": serviceStartTime, "service_end_time": serviceEndTime, "service_location": serviceLocation, "created_at": created})
 		}
 	}
 	writeJSON(w, 200, items)
@@ -346,14 +359,14 @@ func (s *Server) getOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var order map[string]any = make(map[string]any)
-	var number, customer, phone, serviceType, description, status, dueDate, serviceDate, paymentPlanMethod, createdAt string
+	var number, customer, phone, serviceType, description, status, dueDate, serviceDate, serviceStartTime, serviceEndTime, serviceLocation, paymentPlanMethod, createdAt string
 	var total int64
-	if err := s.db.QueryRow("SELECT number,customer_name,customer_phone,service_type,description,total_cents,status,COALESCE(due_date,''),COALESCE(service_date,''),COALESCE(payment_plan_method,''),created_at FROM service_orders WHERE id=?", id).Scan(&number, &customer, &phone, &serviceType, &description, &total, &status, &dueDate, &serviceDate, &paymentPlanMethod, &createdAt); err != nil {
+	if err := s.db.QueryRow("SELECT number,customer_name,customer_phone,service_type,description,total_cents,status,COALESCE(due_date,''),COALESCE(service_date,''),COALESCE(service_start_time,''),COALESCE(service_end_time,''),COALESCE(service_location,''),COALESCE(payment_plan_method,''),created_at FROM service_orders WHERE id=?", id).Scan(&number, &customer, &phone, &serviceType, &description, &total, &status, &dueDate, &serviceDate, &serviceStartTime, &serviceEndTime, &serviceLocation, &paymentPlanMethod, &createdAt); err != nil {
 		writeError(w, http.StatusNotFound, "order not found")
 		return
 	}
 	order["id"], order["number"], order["customer_name"], order["customer_phone"], order["service_type"] = id, number, customer, phone, serviceType
-	order["description"], order["total_cents"], order["status"], order["due_date"], order["service_date"], order["payment_plan_method"], order["created_at"] = description, total, status, dueDate, serviceDate, paymentPlanMethod, createdAt
+	order["description"], order["total_cents"], order["status"], order["due_date"], order["service_date"], order["service_start_time"], order["service_end_time"], order["service_location"], order["payment_plan_method"], order["created_at"] = description, total, status, dueDate, serviceDate, serviceStartTime, serviceEndTime, serviceLocation, paymentPlanMethod, createdAt
 	rows, err := s.db.Query("SELECT r.id,r.installment_number,r.total_installments,r.due_date,r.amount_cents,r.status,COALESCE(SUM(p.amount_cents),0) FROM receivables r LEFT JOIN payments p ON p.receivable_id=r.id WHERE r.order_id=? GROUP BY r.id ORDER BY r.installment_number", id)
 	if err != nil {
 		writeError(w, 500, "could not load installments")
@@ -417,6 +430,9 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 		Description         string `json:"description"`
 		DueDate             string `json:"due_date"`
 		ServiceDate         string `json:"service_date"`
+		ServiceStartTime    string `json:"service_start_time"`
+		ServiceEndTime      string `json:"service_end_time"`
+		ServiceLocation     string `json:"service_location"`
 		TotalCents          int64  `json:"total_cents"`
 		Installments        int    `json:"installments"`
 		FirstDueDate        string `json:"first_due_date"`
@@ -441,6 +457,24 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "initial payment exceeds total")
 		return
 	}
+	if input.ServiceDate != "" {
+		if _, err := time.ParseInLocation("2006-01-02", input.ServiceDate, time.FixedZone("BRT", -3*60*60)); err != nil {
+			writeError(w, 400, "invalid service date")
+			return
+		}
+		if input.ServiceStartTime == "" {
+			input.ServiceStartTime = "09:00"
+		}
+		if input.ServiceEndTime == "" {
+			input.ServiceEndTime = "10:00"
+		}
+		startClock, startErr := time.Parse("15:04", input.ServiceStartTime)
+		endClock, endErr := time.Parse("15:04", input.ServiceEndTime)
+		if startErr != nil || endErr != nil || !endClock.After(startClock) {
+			writeError(w, 400, "invalid service time interval")
+			return
+		}
+	}
 	u := r.Context().Value(userKey).(user)
 	now := time.Now().UTC()
 	tx, err := s.db.Begin()
@@ -450,7 +484,7 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	var id int64
-	if err = tx.QueryRow("INSERT INTO service_orders(number,customer_name,customer_phone,service_type,description,total_cents,status,due_date,service_date,payment_plan_method,created_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id", fmt.Sprintf("OS-%s-%d", now.Format("20060102"), now.UnixNano()%100000), input.CustomerName, input.CustomerPhone, input.ServiceType, input.Description, input.TotalCents, "open", input.DueDate, input.ServiceDate, input.InstallmentMethod, now.Format(time.RFC3339), u.ID).Scan(&id); err != nil {
+	if err = tx.QueryRow("INSERT INTO service_orders(number,customer_name,customer_phone,service_type,description,total_cents,status,due_date,service_date,service_start_time,service_end_time,service_location,payment_plan_method,created_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id", fmt.Sprintf("OS-%s-%d", now.Format("20060102"), now.UnixNano()%100000), input.CustomerName, input.CustomerPhone, input.ServiceType, input.Description, input.TotalCents, "open", input.DueDate, input.ServiceDate, input.ServiceStartTime, input.ServiceEndTime, input.ServiceLocation, input.InstallmentMethod, now.Format(time.RFC3339), u.ID).Scan(&id); err != nil {
 		writeError(w, 500, "could not create order")
 		return
 	}
@@ -483,12 +517,36 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	appointmentCreated := false
+	if isCalendarService(input.ServiceType) && input.ServiceDate != "" {
+		brt := time.FixedZone("BRT", -3*60*60)
+		serviceDay, _ := time.ParseInLocation("2006-01-02", input.ServiceDate, brt)
+		startClock, _ := time.Parse("15:04", input.ServiceStartTime)
+		endClock, _ := time.Parse("15:04", input.ServiceEndTime)
+		start := time.Date(serviceDay.Year(), serviceDay.Month(), serviceDay.Day(), startClock.Hour(), startClock.Minute(), 0, 0, brt)
+		end := time.Date(serviceDay.Year(), serviceDay.Month(), serviceDay.Day(), endClock.Hour(), endClock.Minute(), 0, 0, brt)
+		startUTC, endUTC := start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339)
+		var conflicts int
+		if err = tx.QueryRow("SELECT COUNT(*) FROM appointments WHERE status!='cancelled' AND starts_at < ? AND ends_at > ?", endUTC, startUTC).Scan(&conflicts); err != nil {
+			writeError(w, 500, "could not check calendar conflicts")
+			return
+		}
+		if conflicts > 0 {
+			writeError(w, http.StatusConflict, "service date conflicts with an existing appointment")
+			return
+		}
+		if _, err = tx.Exec("INSERT INTO appointments(title,starts_at,ends_at,location,notes,order_id,created_at,created_by) VALUES(?,?,?,?,?,?,?,?)", fmt.Sprintf("%s · %s", input.ServiceType, input.CustomerName), startUTC, endUTC, input.ServiceLocation, input.Description, id, now.Format(time.RFC3339), u.ID); err != nil {
+			writeError(w, 500, "could not create calendar appointment")
+			return
+		}
+		appointmentCreated = true
+	}
 	if err = tx.Commit(); err != nil {
 		writeError(w, 500, "could not save order")
 		return
 	}
-	s.audit(r.Context().Value(userKey).(user), "create", "service_order", id, map[string]any{"total_cents": input.TotalCents, "installments": input.Installments})
-	writeJSON(w, 201, map[string]any{"id": id, "number": fmt.Sprintf("OS-%s-%d", now.Format("20060102"), now.UnixNano()%100000)})
+	s.audit(r.Context().Value(userKey).(user), "create", "service_order", id, map[string]any{"total_cents": input.TotalCents, "installments": input.Installments, "appointment_created": appointmentCreated})
+	writeJSON(w, 201, map[string]any{"id": id, "number": fmt.Sprintf("OS-%s-%d", now.Format("20060102"), now.UnixNano()%100000), "appointment_created": appointmentCreated})
 }
 
 func (s *Server) createPayment(w http.ResponseWriter, r *http.Request) {
@@ -666,7 +724,9 @@ func (s *Server) exportCashbook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listAppointments(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query("SELECT a.id,a.title,a.starts_at,a.ends_at,COALESCE(a.location,''),COALESCE(a.notes,''),COALESCE(a.order_id,0),a.status,COALESCE(o.number,''),COALESCE(o.customer_name,''),COALESCE(o.service_type,'') FROM appointments a LEFT JOIN service_orders o ON o.id=a.order_id WHERE a.status!='cancelled' AND a.starts_at >= ? ORDER BY a.starts_at LIMIT 100", time.Now().UTC().Format(time.RFC3339))
+	calendarStart := time.Now().UTC().AddDate(0, 0, -90).Format(time.RFC3339)
+	calendarEnd := time.Now().UTC().AddDate(1, 0, 0).Format(time.RFC3339)
+	rows, err := s.db.Query("SELECT a.id,a.title,a.starts_at,a.ends_at,COALESCE(a.location,''),COALESCE(a.notes,''),COALESCE(a.order_id,0),a.status,COALESCE(o.number,''),COALESCE(o.customer_name,''),COALESCE(o.service_type,'') FROM appointments a LEFT JOIN service_orders o ON o.id=a.order_id WHERE a.status!='cancelled' AND a.starts_at >= ? AND a.starts_at <= ? ORDER BY a.starts_at LIMIT 100", calendarStart, calendarEnd)
 	if err != nil {
 		writeError(w, 500, "could not list appointments")
 		return
@@ -838,6 +898,71 @@ func (s *Server) resetLogin(key string) {
 	delete(s.loginFailures, key)
 	s.loginMu.Unlock()
 }
+
+func isCalendarService(serviceType string) bool {
+	switch strings.ToLower(strings.TrimSpace(serviceType)) {
+	case "ensaio fotográfico", "ensaio fotografico", "casamento", "evento":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) backfillCalendarAppointments() error {
+	rows, err := s.db.Query("SELECT o.id,o.number,o.customer_name,o.service_type,COALESCE(o.description,''),o.service_date,COALESCE(o.service_start_time,'09:00'),COALESCE(o.service_end_time,'10:00'),COALESCE(o.service_location,''),o.created_by FROM service_orders o WHERE o.service_date!='' AND NOT EXISTS (SELECT 1 FROM appointments a WHERE a.order_id=o.id)")
+	if err != nil {
+		return err
+	}
+	type orderSchedule struct {
+		orderID, createdBy                             int64
+		number, customerName, serviceType, description string
+		serviceDate, startTime, endTime, location      string
+	}
+	var schedules []orderSchedule
+	for rows.Next() {
+		var schedule orderSchedule
+		if err := rows.Scan(&schedule.orderID, &schedule.number, &schedule.customerName, &schedule.serviceType, &schedule.description, &schedule.serviceDate, &schedule.startTime, &schedule.endTime, &schedule.location, &schedule.createdBy); err != nil {
+			rows.Close()
+			return err
+		}
+		schedules = append(schedules, schedule)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	brt := time.FixedZone("BRT", -3*60*60)
+	for _, schedule := range schedules {
+		if !isCalendarService(schedule.serviceType) {
+			continue
+		}
+		serviceDay, dateErr := time.ParseInLocation("2006-01-02", schedule.serviceDate, brt)
+		startClock, startErr := time.Parse("15:04", schedule.startTime)
+		endClock, endErr := time.Parse("15:04", schedule.endTime)
+		if dateErr != nil || startErr != nil || endErr != nil || !endClock.After(startClock) {
+			log.Printf("calendar_backfill_skipped order=%d reason=invalid_service_schedule", schedule.orderID)
+			continue
+		}
+		start := time.Date(serviceDay.Year(), serviceDay.Month(), serviceDay.Day(), startClock.Hour(), startClock.Minute(), 0, 0, brt)
+		end := time.Date(serviceDay.Year(), serviceDay.Month(), serviceDay.Day(), endClock.Hour(), endClock.Minute(), 0, 0, brt)
+		startUTC, endUTC := start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339)
+		var conflicts int
+		if err := s.db.QueryRow("SELECT COUNT(*) FROM appointments WHERE status!='cancelled' AND starts_at < ? AND ends_at > ?", endUTC, startUTC).Scan(&conflicts); err != nil {
+			return err
+		}
+		if conflicts > 0 {
+			log.Printf("calendar_backfill_skipped order=%d reason=appointment_conflict", schedule.orderID)
+			continue
+		}
+		if _, err := s.db.Exec("INSERT INTO appointments(title,starts_at,ends_at,location,notes,order_id,created_at,created_by) VALUES(?,?,?,?,?,?,?,?)", fmt.Sprintf("%s · %s", schedule.serviceType, schedule.customerName), startUTC, endUTC, schedule.location, schedule.description, schedule.orderID, time.Now().UTC().Format(time.RFC3339), schedule.createdBy); err != nil {
+			return err
+		}
+		log.Printf("calendar_backfill_created order=%s id=%d", schedule.number, schedule.orderID)
+	}
+	return nil
+}
+
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err == nil {
