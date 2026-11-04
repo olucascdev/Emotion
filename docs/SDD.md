@@ -40,10 +40,11 @@ Acceptance: a R$ 100 receipt and a R$ 40 paid expense produce R$ 60 result; pend
 
 - `ORDER-01`: Record customer, service type, description, total and status.
 - `ORDER-02`: Split the total into 1–120 installments and distribute cent residuals deterministically.
-- `ORDER-03`: Allocate an initial payment against expected installments and reduce the outstanding balance.
+- `ORDER-03`: Record an initial payment as a paid entry and generate remaining receivables from the outstanding balance.
+- `ORDER-05`: Capture the service/photography date, first installment due date, observations and separate payment methods for the entry and remaining installments.
 - `ORDER-04`: Reject overpayments, negative amounts and invalid required fields.
 
-Acceptance: a R$ 1,200 order in 12 installments creates twelve R$ 100 receivables; a R$ 500 signal leaves R$ 700 to receive; an overpayment returns 400 and creates no committed order.
+Acceptance: a R$ 1,200 order in 12 installments creates twelve R$ 100 receivables; a R$ 500 signal creates a paid entry and leaves R$ 700 to receive; the form previews each remaining installment, stores the service date and supports separate Pix/credit/etc. methods; an overpayment returns 400 and creates no committed order.
 
 ### CAL — calendar
 

@@ -103,6 +103,67 @@ func TestCreateOrderAllocatesInitialPayment(t *testing.T) {
 	if body["receivable_cents"] != float64(70000) {
 		t.Fatalf("receivable_cents = %v", body["receivable_cents"])
 	}
+	var created map[string]any
+	if err := json.Unmarshal(orderRecorder.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	orderID := int64(created["id"].(float64))
+	detail := httptest.NewRequest(http.MethodGet, "/api/orders/"+strconv.FormatInt(orderID, 10), nil)
+	detail.AddCookie(cookie)
+	detailRecorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(detailRecorder, detail)
+	if detailRecorder.Code != http.StatusOK {
+		t.Fatalf("detail status = %d", detailRecorder.Code)
+	}
+	var detailBody map[string]any
+	if err := json.NewDecoder(detailRecorder.Body).Decode(&detailBody); err != nil {
+		t.Fatal(err)
+	}
+	if detailBody["service_date"] != "" {
+		t.Fatalf("unexpected service date: %v", detailBody["service_date"])
+	}
+	installments := detailBody["installments"].([]any)
+	if len(installments) != 13 {
+		t.Fatalf("installments = %d, want 13 including entry", len(installments))
+	}
+	entry := installments[0].(map[string]any)
+	if entry["number"] != float64(0) || entry["amount_cents"] != float64(50000) || entry["status"] != "paid" {
+		t.Fatalf("unexpected entry: %#v", entry)
+	}
+	firstDue := installments[1].(map[string]any)
+	if firstDue["amount_cents"] != float64(5834) {
+		t.Fatalf("first installment = %v, want 5834", firstDue["amount_cents"])
+	}
+}
+
+func TestCreateOrderStoresServiceDateAndPaymentPlan(t *testing.T) {
+	s := testServer(t)
+	cookie := authenticatedCookie(t, s)
+	request := httptest.NewRequest(http.MethodPost, "/api/orders", strings.NewReader(`{"customer_name":"João","service_type":"Ensaio","description":"Levar duas lentes","service_date":"2026-12-15","first_due_date":"2026-11-20","installment_method":"credit","total_cents":10000,"installments":3}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(cookie)
+	recorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("order status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var created map[string]any
+	_ = json.NewDecoder(recorder.Body).Decode(&created)
+	detail := httptest.NewRequest(http.MethodGet, "/api/orders/"+strconv.FormatInt(int64(created["id"].(float64)), 10), nil)
+	detail.AddCookie(cookie)
+	detailRecorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(detailRecorder, detail)
+	var body map[string]any
+	_ = json.NewDecoder(detailRecorder.Body).Decode(&body)
+	if body["service_date"] != "2026-12-15" {
+		t.Fatalf("service_date = %v", body["service_date"])
+	}
+	if body["description"] != "Levar duas lentes" {
+		t.Fatalf("description = %v", body["description"])
+	}
+	if body["payment_plan_method"] != "credit" {
+		t.Fatalf("payment_plan_method = %v", body["payment_plan_method"])
+	}
 }
 
 func authenticatedCookie(t *testing.T, s *Server) *http.Cookie {

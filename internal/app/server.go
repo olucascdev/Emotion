@@ -100,7 +100,7 @@ func NewServer(cfg Config) (*Server, error) {
 func (s *Server) migrate() error {
 	_, err := s.db.Exec(`PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','manager')), active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS service_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, number TEXT NOT NULL UNIQUE, customer_name TEXT NOT NULL, customer_phone TEXT, service_type TEXT NOT NULL, description TEXT, total_cents INTEGER NOT NULL CHECK(total_cents >= 0), status TEXT NOT NULL DEFAULT 'open', due_date TEXT, created_at TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS service_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, number TEXT NOT NULL UNIQUE, customer_name TEXT NOT NULL, customer_phone TEXT, service_type TEXT NOT NULL, description TEXT, total_cents INTEGER NOT NULL CHECK(total_cents >= 0), status TEXT NOT NULL DEFAULT 'open', due_date TEXT, service_date TEXT, payment_plan_method TEXT, created_at TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS receivables (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL REFERENCES service_orders(id), installment_number INTEGER NOT NULL, total_installments INTEGER NOT NULL, due_date TEXT NOT NULL, amount_cents INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending');
 CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER REFERENCES service_orders(id), receivable_id INTEGER REFERENCES receivables(id), amount_cents INTEGER NOT NULL CHECK(amount_cents > 0), paid_at TEXT NOT NULL, method TEXT NOT NULL, note TEXT);
 CREATE TABLE IF NOT EXISTS expenses (id INTEGER PRIMARY KEY AUTOINCREMENT, description TEXT NOT NULL, category TEXT NOT NULL, amount_cents INTEGER NOT NULL CHECK(amount_cents > 0), due_date TEXT, paid_at TEXT, method TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id));
@@ -109,7 +109,16 @@ CREATE TABLE IF NOT EXISTS audit_events (id INTEGER PRIMARY KEY AUTOINCREMENT, u
 CREATE INDEX IF NOT EXISTS idx_payments_paid_at ON payments(paid_at);
 CREATE INDEX IF NOT EXISTS idx_expenses_status ON expenses(status);
 CREATE INDEX IF NOT EXISTS idx_appointments_starts_at ON appointments(starts_at);`)
-	return err
+	if err != nil {
+		return err
+	}
+	if _, err = s.db.Exec("ALTER TABLE service_orders ADD COLUMN service_date TEXT"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	if _, err = s.db.Exec("ALTER TABLE service_orders ADD COLUMN payment_plan_method TEXT"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	return nil
 }
 
 func (s *Server) ensureAdmin(email, password string) error {
@@ -312,7 +321,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listOrders(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query("SELECT id,number,customer_name,service_type,total_cents,status,due_date,created_at FROM service_orders ORDER BY id DESC LIMIT 100")
+	rows, err := s.db.Query("SELECT id,number,customer_name,service_type,total_cents,status,COALESCE(due_date,''),COALESCE(service_date,''),created_at FROM service_orders ORDER BY id DESC LIMIT 100")
 	if err != nil {
 		writeError(w, 500, "could not list orders")
 		return
@@ -321,10 +330,10 @@ func (s *Server) listOrders(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id int64
-		var number, name, typ, status, due, created string
+		var number, name, typ, status, due, serviceDate, created string
 		var total int64
-		if rows.Scan(&id, &number, &name, &typ, &total, &status, &due, &created) == nil {
-			items = append(items, map[string]any{"id": id, "number": number, "customer_name": name, "service_type": typ, "total_cents": total, "status": status, "due_date": due, "created_at": created})
+		if rows.Scan(&id, &number, &name, &typ, &total, &status, &due, &serviceDate, &created) == nil {
+			items = append(items, map[string]any{"id": id, "number": number, "customer_name": name, "service_type": typ, "total_cents": total, "status": status, "due_date": due, "service_date": serviceDate, "created_at": created})
 		}
 	}
 	writeJSON(w, 200, items)
@@ -337,14 +346,14 @@ func (s *Server) getOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var order map[string]any = make(map[string]any)
-	var number, customer, phone, serviceType, description, status, dueDate, createdAt string
+	var number, customer, phone, serviceType, description, status, dueDate, serviceDate, paymentPlanMethod, createdAt string
 	var total int64
-	if err := s.db.QueryRow("SELECT number,customer_name,customer_phone,service_type,description,total_cents,status,due_date,created_at FROM service_orders WHERE id=?", id).Scan(&number, &customer, &phone, &serviceType, &description, &total, &status, &dueDate, &createdAt); err != nil {
+	if err := s.db.QueryRow("SELECT number,customer_name,customer_phone,service_type,description,total_cents,status,COALESCE(due_date,''),COALESCE(service_date,''),COALESCE(payment_plan_method,''),created_at FROM service_orders WHERE id=?", id).Scan(&number, &customer, &phone, &serviceType, &description, &total, &status, &dueDate, &serviceDate, &paymentPlanMethod, &createdAt); err != nil {
 		writeError(w, http.StatusNotFound, "order not found")
 		return
 	}
 	order["id"], order["number"], order["customer_name"], order["customer_phone"], order["service_type"] = id, number, customer, phone, serviceType
-	order["description"], order["total_cents"], order["status"], order["due_date"], order["created_at"] = description, total, status, dueDate, createdAt
+	order["description"], order["total_cents"], order["status"], order["due_date"], order["service_date"], order["payment_plan_method"], order["created_at"] = description, total, status, dueDate, serviceDate, paymentPlanMethod, createdAt
 	rows, err := s.db.Query("SELECT r.id,r.installment_number,r.total_installments,r.due_date,r.amount_cents,r.status,COALESCE(SUM(p.amount_cents),0) FROM receivables r LEFT JOIN payments p ON p.receivable_id=r.id WHERE r.order_id=? GROUP BY r.id ORDER BY r.installment_number", id)
 	if err != nil {
 		writeError(w, 500, "could not load installments")
@@ -407,10 +416,12 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 		ServiceType         string `json:"service_type"`
 		Description         string `json:"description"`
 		DueDate             string `json:"due_date"`
+		ServiceDate         string `json:"service_date"`
 		TotalCents          int64  `json:"total_cents"`
 		Installments        int    `json:"installments"`
 		FirstDueDate        string `json:"first_due_date"`
 		PaymentMethod       string `json:"payment_method"`
+		InstallmentMethod   string `json:"installment_method"`
 		InitialPaymentCents int64  `json:"initial_payment_cents"`
 	}
 	if !readJSON(w, r, &input) || strings.TrimSpace(input.CustomerName) == "" || strings.TrimSpace(input.ServiceType) == "" || input.TotalCents <= 0 {
@@ -439,15 +450,27 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	var id int64
-	if err = tx.QueryRow("INSERT INTO service_orders(number,customer_name,customer_phone,service_type,description,total_cents,status,due_date,created_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id", fmt.Sprintf("OS-%s-%d", now.Format("20060102"), now.UnixNano()%100000), input.CustomerName, input.CustomerPhone, input.ServiceType, input.Description, input.TotalCents, "open", input.DueDate, now.Format(time.RFC3339), u.ID).Scan(&id); err != nil {
+	if err = tx.QueryRow("INSERT INTO service_orders(number,customer_name,customer_phone,service_type,description,total_cents,status,due_date,service_date,payment_plan_method,created_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id", fmt.Sprintf("OS-%s-%d", now.Format("20060102"), now.UnixNano()%100000), input.CustomerName, input.CustomerPhone, input.ServiceType, input.Description, input.TotalCents, "open", input.DueDate, input.ServiceDate, input.InstallmentMethod, now.Format(time.RFC3339), u.ID).Scan(&id); err != nil {
 		writeError(w, 500, "could not create order")
 		return
 	}
-	base := input.TotalCents / int64(input.Installments)
-	remainder := input.TotalCents % int64(input.Installments)
+	remainingTotal := input.TotalCents - input.InitialPaymentCents
+	base := remainingTotal / int64(input.Installments)
+	remainder := remainingTotal % int64(input.Installments)
 	due, _ := time.Parse("2006-01-02", input.FirstDueDate)
 	if input.FirstDueDate == "" {
 		due = now
+	}
+	if input.InitialPaymentCents > 0 {
+		var entryID int64
+		if err = tx.QueryRow("INSERT INTO receivables(order_id,installment_number,total_installments,due_date,amount_cents,status) VALUES(?,?,?,?,?,?) RETURNING id", id, 0, input.Installments, now.Format("2006-01-02"), input.InitialPaymentCents, "paid").Scan(&entryID); err != nil {
+			writeError(w, 500, "could not create initial payment")
+			return
+		}
+		if _, err = tx.Exec("INSERT INTO payments(order_id,receivable_id,amount_cents,paid_at,method) VALUES(?,?,?,?,?)", id, entryID, input.InitialPaymentCents, now.Format(time.RFC3339), input.PaymentMethod); err != nil {
+			writeError(w, 500, "could not create initial payment")
+			return
+		}
 	}
 	for i := 1; i <= input.Installments; i++ {
 		amount := base
@@ -459,36 +482,6 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, "could not create receivables")
 			return
 		}
-	}
-	if input.InitialPaymentCents > 0 {
-		remaining := input.InitialPaymentCents
-		rows, queryErr := tx.Query("SELECT id, amount_cents FROM receivables WHERE order_id = ? ORDER BY installment_number", id)
-		if queryErr != nil {
-			writeError(w, 500, "could not allocate payment")
-			return
-		}
-		for rows.Next() {
-			var receivableID, amount int64
-			if scanErr := rows.Scan(&receivableID, &amount); scanErr != nil {
-				rows.Close()
-				writeError(w, 500, "could not allocate payment")
-				return
-			}
-			if remaining == 0 {
-				break
-			}
-			allocation := amount
-			if remaining < allocation {
-				allocation = remaining
-			}
-			if _, err = tx.Exec("INSERT INTO payments(order_id,receivable_id,amount_cents,paid_at,method) VALUES(?,?,?,?,?)", id, receivableID, allocation, now.Format(time.RFC3339), input.PaymentMethod); err != nil {
-				rows.Close()
-				writeError(w, 500, "could not create payment")
-				return
-			}
-			remaining -= allocation
-		}
-		rows.Close()
 	}
 	if err = tx.Commit(); err != nil {
 		writeError(w, 500, "could not save order")
