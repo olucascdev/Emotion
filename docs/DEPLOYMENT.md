@@ -24,6 +24,8 @@ Copy the backup outside the VPS and encrypt it with the organization's secret-ma
 /app/emotion-backup -mode restore -out /path/to/backup.db -db /app/data/emotion.db
 ```
 
+The included `/app/scripts/backup.sh` wrapper creates UTC-stamped backups and removes local copies older than 30 days. Schedule it with Dockploy or a VPS timer, then copy each new file to an encrypted off-site location.
+
 The restore command checks SQLite integrity before replacing the database file. Always perform a restore rehearsal in a temporary container before a real incident.
 
 ## Smoke test after deployment
@@ -34,3 +36,5 @@ The restore command checks SQLite integrity before replacing the database file. 
 4. Create one paid expense and one pending expense.
 5. Verify the dashboard result and download the CSV cashbook.
 6. Create overlapping appointments and confirm the second one is rejected.
+
+The repository also includes `scripts/smoke.sh`. Set `BASE_URL`, `ADMIN_EMAIL` and `ADMIN_PASSWORD`, then run it after a deployment to automate the health, login, order and dashboard checks.

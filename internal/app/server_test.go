@@ -192,3 +192,30 @@ func TestAppointmentRejectsConflict(t *testing.T) {
 		t.Fatalf("conflict status=%d", code)
 	}
 }
+
+func TestAdminCanCreateManagerAndReadAudit(t *testing.T) {
+	s := testServer(t)
+	cookie := authenticatedCookie(t, s)
+	create := httptest.NewRequest(http.MethodPost, "/api/users", strings.NewReader(`{"name":"Manager","email":"manager@example.com","password":"a-secure-manager-password","role":"manager"}`))
+	create.Header.Set("Content-Type", "application/json")
+	create.AddCookie(cookie)
+	createRecorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(createRecorder, create)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create user status = %d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+	audit := httptest.NewRequest(http.MethodGet, "/api/audit", nil)
+	audit.AddCookie(cookie)
+	auditRecorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(auditRecorder, audit)
+	if auditRecorder.Code != http.StatusOK {
+		t.Fatalf("audit status = %d", auditRecorder.Code)
+	}
+	var events []map[string]any
+	if err := json.NewDecoder(auditRecorder.Body).Decode(&events); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected an audit event")
+	}
+}

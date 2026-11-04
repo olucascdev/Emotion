@@ -18,11 +18,13 @@ RUN CGO_ENABLED=1 go build -trimpath -ldflags='-s -w' -o /out/emotion-backup ./c
 FROM alpine:3.21
 RUN addgroup -S emotion && adduser -S -G emotion emotion
 WORKDIR /app
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata curl
 COPY --from=api-builder /out/emotion /app/emotion
 COPY --from=api-builder /out/emotion-backup /app/emotion-backup
 COPY --from=web-builder /src/web/dist /app/web/dist
+COPY scripts /app/scripts
 RUN mkdir -p /app/data && chown -R emotion:emotion /app
+RUN chmod 755 /app/scripts/*.sh && chown -R emotion:emotion /app/scripts
 USER emotion
 ENV PORT=8080 DATABASE_PATH=/app/data/emotion.db COOKIE_SECURE=true
 EXPOSE 8080

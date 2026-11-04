@@ -140,6 +140,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/dashboard", s.auth(http.HandlerFunc(s.dashboard)))
 	mux.Handle("GET /api/orders", s.auth(http.HandlerFunc(s.listOrders)))
 	mux.Handle("GET /api/orders/{id}", s.auth(http.HandlerFunc(s.getOrder)))
+	mux.Handle("PUT /api/orders/{id}", s.auth(http.HandlerFunc(s.updateOrder)))
 	mux.Handle("POST /api/orders", s.auth(http.HandlerFunc(s.createOrder)))
 	mux.Handle("POST /api/payments", s.auth(http.HandlerFunc(s.createPayment)))
 	mux.Handle("GET /api/expenses", s.auth(http.HandlerFunc(s.listExpenses)))
@@ -148,6 +149,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/export/cashbook.csv", s.auth(http.HandlerFunc(s.exportCashbook)))
 	mux.Handle("GET /api/appointments", s.auth(http.HandlerFunc(s.listAppointments)))
 	mux.Handle("POST /api/appointments", s.auth(http.HandlerFunc(s.createAppointment)))
+	mux.Handle("POST /api/appointments/{id}/cancel", s.auth(http.HandlerFunc(s.cancelAppointment)))
+	mux.Handle("GET /api/users", s.auth(s.admin(http.HandlerFunc(s.listUsers))))
+	mux.Handle("POST /api/users", s.auth(s.admin(http.HandlerFunc(s.createUser))))
+	mux.Handle("GET /api/audit", s.auth(s.admin(http.HandlerFunc(s.listAudit))))
 	return s.withHeaders(s.withRequestLog(s.withCORS(s.withStatic(mux))))
 }
 
@@ -277,6 +282,16 @@ func (s *Server) auth(next http.Handler) http.Handler {
 	})
 }
 
+func (s *Server) admin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, ok := r.Context().Value(userKey).(user); !ok || u.Role != roleAdmin {
+			writeError(w, http.StatusForbidden, "administrator access required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) newToken(u user) (string, error) {
 	now := time.Now()
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims{Email: u.Email, Role: u.Role, RegisteredClaims: jwt.RegisteredClaims{Issuer: "emotion", Subject: strconv.FormatInt(u.ID, 10), Audience: []string{"emotion-web"}, ExpiresAt: jwt.NewNumericDate(now.Add(15 * time.Minute)), IssuedAt: jwt.NewNumericDate(now)}})
@@ -348,6 +363,41 @@ func (s *Server) getOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	order["installments"] = installments
 	writeJSON(w, 200, order)
+}
+
+func (s *Server) updateOrder(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		writeError(w, 400, "invalid order id")
+		return
+	}
+	var input struct {
+		CustomerName  string `json:"customer_name"`
+		CustomerPhone string `json:"customer_phone"`
+		Description   string `json:"description"`
+		DueDate       string `json:"due_date"`
+		Status        string `json:"status"`
+	}
+	if !readJSON(w, r, &input) {
+		return
+	}
+	allowed := map[string]bool{"open": true, "in_progress": true, "completed": true, "cancelled": true}
+	if input.Status != "" && !allowed[input.Status] {
+		writeError(w, 400, "invalid order status")
+		return
+	}
+	result, err := s.db.Exec("UPDATE service_orders SET customer_name=COALESCE(NULLIF(?,''),customer_name),customer_phone=?,description=?,due_date=?,status=COALESCE(NULLIF(?,''),status) WHERE id=?", input.CustomerName, input.CustomerPhone, input.Description, input.DueDate, input.Status, id)
+	if err != nil {
+		writeError(w, 500, "could not update order")
+		return
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		writeError(w, 404, "order not found")
+		return
+	}
+	s.audit(r.Context().Value(userKey).(user), "update", "service_order", id, map[string]any{"status": input.Status})
+	writeJSON(w, 200, map[string]any{"id": id, "status": input.Status})
 }
 
 func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
@@ -681,6 +731,91 @@ func (s *Server) createAppointment(w http.ResponseWriter, r *http.Request) {
 	id, _ := res.LastInsertId()
 	s.audit(u, "create", "appointment", id, map[string]any{"starts_at": input.StartsAt, "ends_at": input.EndsAt})
 	writeJSON(w, 201, map[string]any{"id": id})
+}
+
+func (s *Server) cancelAppointment(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		writeError(w, 400, "invalid appointment id")
+		return
+	}
+	result, err := s.db.Exec("UPDATE appointments SET status='cancelled' WHERE id=? AND status!='cancelled'", id)
+	if err != nil {
+		writeError(w, 500, "could not cancel appointment")
+		return
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		writeError(w, 404, "appointment not found")
+		return
+	}
+	s.audit(r.Context().Value(userKey).(user), "cancel", "appointment", id, nil)
+	writeJSON(w, 200, map[string]any{"id": id, "status": "cancelled"})
+}
+
+func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query("SELECT id,email,name,role,active,created_at FROM users ORDER BY id")
+	if err != nil {
+		writeError(w, 500, "could not list users")
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id int64
+		var email, name, role, created string
+		var active int
+		if rows.Scan(&id, &email, &name, &role, &active, &created) == nil {
+			items = append(items, map[string]any{"id": id, "email": email, "name": name, "role": role, "active": active == 1, "created_at": created})
+		}
+	}
+	writeJSON(w, 200, items)
+}
+func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Name     string `json:"name"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+		Role     string `json:"role"`
+	}
+	if !readJSON(w, r, &input) || strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.Email) == "" || len(input.Password) < 12 {
+		writeError(w, 400, "name, email and a 12 character password are required")
+		return
+	}
+	if input.Role != "manager" && input.Role != "admin" {
+		writeError(w, 400, "invalid role")
+		return
+	}
+	hash, err := hashPassword(input.Password)
+	if err != nil {
+		writeError(w, 500, "could not secure password")
+		return
+	}
+	result, err := s.db.Exec("INSERT INTO users(email,name,password_hash,role,created_at) VALUES(?,?,?,?,?)", strings.ToLower(strings.TrimSpace(input.Email)), strings.TrimSpace(input.Name), hash, input.Role, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		writeError(w, 409, "email already exists")
+		return
+	}
+	id, _ := result.LastInsertId()
+	s.audit(r.Context().Value(userKey).(user), "create", "user", id, map[string]any{"role": input.Role})
+	writeJSON(w, 201, map[string]any{"id": id, "role": input.Role})
+}
+func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query("SELECT a.id,a.action,a.entity,a.entity_id,a.details,a.created_at,COALESCE(u.email,'system') FROM audit_events a LEFT JOIN users u ON u.id=a.user_id ORDER BY a.id DESC LIMIT 100")
+	if err != nil {
+		writeError(w, 500, "could not list audit events")
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id, entityID int64
+		var action, entity, details, created, email string
+		if rows.Scan(&id, &action, &entity, &entityID, &details, &created, &email) == nil {
+			items = append(items, map[string]any{"id": id, "action": action, "entity": entity, "entity_id": entityID, "details": details, "created_at": created, "user": email})
+		}
+	}
+	writeJSON(w, 200, items)
 }
 
 func (s *Server) audit(u user, action, entity string, entityID int64, details map[string]any) {
