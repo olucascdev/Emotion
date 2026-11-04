@@ -49,6 +49,7 @@ Acceptance: a R$ 1,200 order in 12 installments creates twelve R$ 100 receivable
 ### CAL — calendar
 
 - `CAL-01`: Appointments have title, start, end, location, notes and optional order link.
+- `CAL-02`: Clicking an appointment opens its full details, including linked order context, and exposes an in-app cancellation action without browser-native confirmation dialogs.
 - `CAL-02`: The UI provides daily, weekly and monthly views.
 - `CAL-03`: User-facing times use `America/Sao_Paulo`; instants are stored in UTC.
 - `CAL-04`: Conflicting times are visible before saving.

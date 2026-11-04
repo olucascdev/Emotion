@@ -666,7 +666,7 @@ func (s *Server) exportCashbook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listAppointments(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query("SELECT id,title,starts_at,ends_at,location,notes,COALESCE(order_id,0),status FROM appointments WHERE starts_at >= ? ORDER BY starts_at LIMIT 100", time.Now().UTC().Format(time.RFC3339))
+	rows, err := s.db.Query("SELECT a.id,a.title,a.starts_at,a.ends_at,COALESCE(a.location,''),COALESCE(a.notes,''),COALESCE(a.order_id,0),a.status,COALESCE(o.number,''),COALESCE(o.customer_name,''),COALESCE(o.service_type,'') FROM appointments a LEFT JOIN service_orders o ON o.id=a.order_id WHERE a.status!='cancelled' AND a.starts_at >= ? ORDER BY a.starts_at LIMIT 100", time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		writeError(w, 500, "could not list appointments")
 		return
@@ -675,10 +675,10 @@ func (s *Server) listAppointments(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id int64
-		var title, start, end, location, notes, status string
+		var title, start, end, location, notes, status, orderNumber, customerName, serviceType string
 		var orderID int64
-		if rows.Scan(&id, &title, &start, &end, &location, &notes, &orderID, &status) == nil {
-			items = append(items, map[string]any{"id": id, "title": title, "starts_at": start, "ends_at": end, "location": location, "notes": notes, "order_id": orderID, "status": status})
+		if rows.Scan(&id, &title, &start, &end, &location, &notes, &orderID, &status, &orderNumber, &customerName, &serviceType) == nil {
+			items = append(items, map[string]any{"id": id, "title": title, "starts_at": start, "ends_at": end, "location": location, "notes": notes, "order_id": orderID, "status": status, "order_number": orderNumber, "customer_name": customerName, "service_type": serviceType})
 		}
 	}
 	writeJSON(w, 200, items)

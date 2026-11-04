@@ -254,6 +254,50 @@ func TestAppointmentRejectsConflict(t *testing.T) {
 	}
 }
 
+func TestAppointmentDetailsAndCancel(t *testing.T) {
+	s := testServer(t)
+	cookie := authenticatedCookie(t, s)
+	create := httptest.NewRequest(http.MethodPost, "/api/appointments", strings.NewReader(`{"title":"Ensaio Lucas","starts_at":"2099-11-03T14:00:00-03:00","ends_at":"2099-11-03T16:00:00-03:00","location":"Estúdio central","notes":"Levar fundo branco"}`))
+	create.Header.Set("Content-Type", "application/json")
+	create.AddCookie(cookie)
+	createRecorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(createRecorder, create)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create appointment status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var created map[string]any
+	_ = json.NewDecoder(createRecorder.Body).Decode(&created)
+	appointmentID := int64(created["id"].(float64))
+	list := httptest.NewRequest(http.MethodGet, "/api/appointments", nil)
+	list.AddCookie(cookie)
+	listRecorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(listRecorder, list)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list appointments status=%d", listRecorder.Code)
+	}
+	var appointments []map[string]any
+	_ = json.NewDecoder(listRecorder.Body).Decode(&appointments)
+	if len(appointments) != 1 || appointments[0]["location"] != "Estúdio central" || appointments[0]["notes"] != "Levar fundo branco" {
+		t.Fatalf("appointment details = %#v", appointments)
+	}
+	cancel := httptest.NewRequest(http.MethodPost, "/api/appointments/"+strconv.FormatInt(appointmentID, 10)+"/cancel", nil)
+	cancel.AddCookie(cookie)
+	cancelRecorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(cancelRecorder, cancel)
+	if cancelRecorder.Code != http.StatusOK {
+		t.Fatalf("cancel appointment status=%d", cancelRecorder.Code)
+	}
+	listAgain := httptest.NewRequest(http.MethodGet, "/api/appointments", nil)
+	listAgain.AddCookie(cookie)
+	listAgainRecorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(listAgainRecorder, listAgain)
+	var remaining []map[string]any
+	_ = json.NewDecoder(listAgainRecorder.Body).Decode(&remaining)
+	if len(remaining) != 0 {
+		t.Fatalf("cancelled appointment still listed: %#v", remaining)
+	}
+}
+
 func TestAdminCanCreateManagerAndReadAudit(t *testing.T) {
 	s := testServer(t)
 	cookie := authenticatedCookie(t, s)
