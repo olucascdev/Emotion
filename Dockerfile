@@ -13,12 +13,14 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=1 go build -trimpath -ldflags='-s -w' -o /out/emotion ./cmd/server
+RUN CGO_ENABLED=1 go build -trimpath -ldflags='-s -w' -o /out/emotion-backup ./cmd/backup
 
 FROM alpine:3.21
 RUN addgroup -S emotion && adduser -S -G emotion emotion
 WORKDIR /app
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=api-builder /out/emotion /app/emotion
+COPY --from=api-builder /out/emotion-backup /app/emotion-backup
 COPY --from=web-builder /src/web/dist /app/web/dist
 RUN mkdir -p /app/data && chown -R emotion:emotion /app
 USER emotion

@@ -9,6 +9,7 @@ services:
     environment:
       DATABASE_PATH: /app/data/emotion.db
       COOKIE_SECURE: "false"
+      CORS_ORIGIN: http://localhost:5173
     volumes:
       - emotion-data:/app/data
 

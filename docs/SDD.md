@@ -75,15 +75,15 @@ Status: **complete**. Go service, SQLite migrations, first admin, Argon2id passw
 
 ### Phase 2 — cashbook and service orders
 
-Status: **partially complete**. Dashboard API, expense creation, order creation, installment generation and initial-payment allocation are implemented. Remaining: payment recording screen, order detail/editing, expense payment action, audit history and CSV export.
+Status: **partially complete**. Dashboard API, expense creation/payment, order creation/detail, installment generation, initial-payment allocation, payment recording, audit writes and CSV export are implemented. Remaining: order editing and an audit history screen.
 
 ### Phase 3 — calendar workflow
 
-Status: **partially complete**. Appointment API and the first calendar shell exist. Remaining: real daily/weekly/monthly grids, create/edit modal, conflict validation and order links in the UI.
+Status: **partially complete**. Appointment API, daily/weekly/monthly grids, create modal and conflict validation are implemented. Remaining: edit/cancel actions and visible order links in the calendar UI.
 
 ### Phase 4 — operational hardening
 
-Status: **planned**. Add external encrypted SQLite backup and restore command, login rate limiting, structured audit logs, production CORS policy, monitoring and deployment runbook. Restore a backup in a staging container before real use.
+Status: **partially complete**. Backup/restore command, login rate limiting, structured request logs, health checks and controlled CORS are implemented. Remaining: encrypted off-site backup automation, monitoring and final production CORS configuration.
 
 ### Phase 5 — production acceptance
 

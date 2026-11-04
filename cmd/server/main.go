@@ -14,6 +14,7 @@ func main() {
 		DatabasePath:  env("DATABASE_PATH", "./data/emotion.db"),
 		JWTSecret:     env("JWT_SECRET", "development-only-change-me-please"),
 		CookieSecure:  env("COOKIE_SECURE", "false") == "true",
+		AllowedOrigin: env("CORS_ORIGIN", "http://localhost:5173"),
 		AdminEmail:    env("ADMIN_EMAIL", "admin@example.com"),
 		AdminPassword: env("ADMIN_PASSWORD", "change-me-now"),
 	})

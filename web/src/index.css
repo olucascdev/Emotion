@@ -11,3 +11,7 @@ button, input, select, textarea { font: inherit; }
 .field { width: 100%; border: 1px solid #ded6cb; border-radius: .75rem; background: white; padding: .75rem 1rem; outline: none; }
 .field:focus { border-color: #e46d4c; }
 .dark .field { border-color: #47433e; background: #302d29; color: #f4f0e8; }
+.panel { border: 1px solid #e9e1d8; border-radius: 1.5rem; background: #fbfaf8; padding: 1.5rem; }
+.dark .panel { border-color: #47433e; background: #252321; }
+.icon-button { display: grid; height: 2.25rem; width: 2.25rem; place-items: center; border-radius: .65rem; background: #f4f0ea; }
+.dark .icon-button { background: #302d29; }
