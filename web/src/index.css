@@ -15,3 +15,4 @@ button, input, select, textarea { font: inherit; }
 .dark .panel { border-color: #47433e; background: #252321; }
 .icon-button { display: grid; height: 2.25rem; width: 2.25rem; place-items: center; border-radius: .65rem; background: #f4f0ea; }
 .dark .icon-button { background: #302d29; }
+.capitalize { text-transform: none !important; }
